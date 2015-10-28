@@ -129,7 +129,7 @@ func testEth(t *testing.T) (ethereum *eth.Ethereum, err error) {
 	db, _ := ethdb.NewMemDatabase()
 	addr := common.HexToAddress(testAddress)
 	core.WriteGenesisBlockForTesting(db, core.GenesisAccount{addr, common.String2Big(testBalance)})
-	ks := crypto.NewKeyStorePassphrase(filepath.Join(tmp, "keystore", crypto.KDFStandard))
+	ks := crypto.NewKeyStorePassphrase(filepath.Join(tmp, "keystore"), crypto.KDFStandard)
 	am := accounts.NewManager(ks)
 	keyb, err := crypto.HexToECDSA(testKey)
 	if err != nil {
