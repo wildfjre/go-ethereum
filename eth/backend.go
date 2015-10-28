@@ -26,7 +26,9 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ethereum/ethash"
@@ -62,6 +64,9 @@ const (
 var (
 	jsonlogger = logger.NewJsonLogger()
 
+	datadirInUseErrNos = []uint{11, 32, 35}
+	portInUseErrRE     = regexp.MustCompile("address already in use")
+
 	defaultBootNodes = []*discover.Node{
 		// ETH/DEV Go Bootnodes
 		discover.MustParseNode("enode://a979fb575495b8d6db44f750317d0f4622bf4c2aa3365d6af7c284339968eef29b69ad0dce72a4d8db5ebb4968de0e3bec910127f134779fbcb0cb6d3331163c@52.16.188.185:30303"), // IE
@@ -88,6 +93,7 @@ type Config struct {
 	GenesisNonce int
 	GenesisFile  string
 	GenesisBlock *types.Block // used by block tests
+	FastSync     bool
 	Olympic      bool
 
 	BlockChainVersion  int
@@ -282,6 +288,17 @@ func New(config *Config) (*Ethereum, error) {
 	// Open the chain database and perform any upgrades needed
 	chainDb, err := newdb(filepath.Join(config.DataDir, "chaindata"))
 	if err != nil {
+		var ok bool
+		errno := uint(err.(syscall.Errno))
+		for _, no := range datadirInUseErrNos {
+			if errno == no {
+				ok = true
+				break
+			}
+		}
+		if ok {
+			err = fmt.Errorf("%v (check if another instance of geth is already running with the same data directory '%s')", err, config.DataDir)
+		}
 		return nil, fmt.Errorf("blockchain db err: %v", err)
 	}
 	if db, ok := chainDb.(*ethdb.LDBDatabase); ok {
@@ -296,6 +313,16 @@ func New(config *Config) (*Ethereum, error) {
 
 	dappDb, err := newdb(filepath.Join(config.DataDir, "dapp"))
 	if err != nil {
+		var ok bool
+		for _, no := range datadirInUseErrNos {
+			if uint(err.(syscall.Errno)) == no {
+				ok = true
+				break
+			}
+		}
+		if ok {
+			err = fmt.Errorf("%v (check if another instance of geth is already running with the same data directory '%s')", err, config.DataDir)
+		}
 		return nil, fmt.Errorf("dapp db err: %v", err)
 	}
 	if db, ok := dappDb.(*ethdb.LDBDatabase); ok {
@@ -391,7 +418,6 @@ func New(config *Config) (*Ethereum, error) {
 		if err == core.ErrNoGenesis {
 			return nil, fmt.Errorf(`Genesis block not found. Please supply a genesis block with the "--genesis /path/to/file" argument`)
 		}
-
 		return nil, err
 	}
 	newPool := core.NewTxPool(eth.EventMux(), eth.blockchain.State, eth.blockchain.GasLimit)
@@ -399,8 +425,9 @@ func New(config *Config) (*Ethereum, error) {
 
 	eth.blockProcessor = core.NewBlockProcessor(chainDb, eth.pow, eth.blockchain, eth.EventMux())
 	eth.blockchain.SetProcessor(eth.blockProcessor)
-	eth.protocolManager = NewProtocolManager(config.NetworkId, eth.eventMux, eth.txPool, eth.pow, eth.blockchain, chainDb)
-
+	if eth.protocolManager, err = NewProtocolManager(config.FastSync, config.NetworkId, eth.eventMux, eth.txPool, eth.pow, eth.blockchain, chainDb); err != nil {
+		return nil, err
+	}
 	eth.miner = miner.New(eth, eth.EventMux(), eth.pow)
 	eth.miner.SetGasPrice(config.GasPrice)
 	eth.miner.SetExtra(config.ExtraData)
@@ -463,7 +490,7 @@ func (s *Ethereum) NodeInfo() *NodeInfo {
 		DiscPort:   int(node.UDP),
 		TCPPort:    int(node.TCP),
 		ListenAddr: s.net.ListenAddr,
-		Td:         s.BlockChain().Td().String(),
+		Td:         s.BlockChain().GetTd(s.BlockChain().CurrentBlock().Hash()).String(),
 	}
 }
 
@@ -553,6 +580,9 @@ func (s *Ethereum) Start() error {
 	})
 	err := s.net.Start()
 	if err != nil {
+		if portInUseErrRE.MatchString(err.Error()) {
+			err = fmt.Errorf("%v (possibly another instance of geth is using the same port)", err)
+		}
 		return err
 	}
 
