@@ -139,8 +139,8 @@ func newWorker(coinbase common.Address, eth core.Backend) *worker {
 		agents:         make(map[Agent]struct{}),
 		fullValidation: false,
 	}
-	go worker.update()
-	go worker.wait()
+	// nopend -- go worker.update()
+	// nopend -- go worker.wait()
 
 	worker.commitNewWork()
 
